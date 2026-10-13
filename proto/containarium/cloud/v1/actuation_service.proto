@@ -42,6 +42,7 @@ option go_package = "github.com/footprintai/containarium/pkg/pb/containarium/clo
 
 import "google/api/annotations.proto";
 import "google/protobuf/timestamp.proto";
+import "containarium/v1/ssh_authz.proto";
 
 // HeartbeatRequest is intentionally empty for v1. The host's identity
 // comes from the bearer; there's nothing else the cloud needs to
@@ -152,6 +153,8 @@ message Assignment {
   map<string, string> secret_env = 16;
 
   google.protobuf.Timestamp updated_at = 20;
+  AssignmentKind kind    = 21;
+  string         user_id = 22;
 }
 
 // PortRoute is one hostname→container-port exposure (mirrors the cloud Route
@@ -429,4 +432,18 @@ service ActuationService {
       get: "/v1/actuation/ssh-trust-bundle"
     };
   }
+
+  rpc AuthorizeSSH(containarium.v1.AuthorizeSSHRequest)
+      returns (containarium.v1.AuthorizeSSHResponse) {
+    option (google.api.http) = {
+      post: "/v1/actuation/ssh/authorize"
+      body: "*"
+    };
+  }
+
+enum AssignmentKind {
+  ASSIGNMENT_KIND_UNSPECIFIED             = 0;
+  ASSIGNMENT_KIND_TERMINATE_USER_SESSIONS = 1;
+}
+
 }

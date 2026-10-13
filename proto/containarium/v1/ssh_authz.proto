@@ -1,0 +1,152 @@
+syntax = "proto3";
+
+package containarium.v1;
+
+option go_package = "github.com/footprintai/containarium/pkg/pb/containarium/v1;containariumv1";
+
+import "google/api/annotations.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+  tags: [{name: "SSH Authorization"}]
+};
+
+// SSHAuthzService is the SSH live-authorization contract.
+// The sentinel calls Authorize on every public-key authentication attempt.
+// Component 1 of the SSH live authorization design (docs/architecture/ssh-live-authorization.md).
+service SSHAuthzService {
+  // Authorize decides whether a public-key SSH authentication attempt is allowed.
+  // The request must be signed by the sentinel (SentinelVerifier.VerifyRequest).
+  // Returns ALLOW, DENY, or APPROVAL_PENDING.
+  rpc Authorize(AuthorizeSSHRequest) returns (AuthorizeSSHResponse) {
+    option (google.api.http) = {
+      post: "/v1/ssh/authorize"
+      body: "*"
+    };
+    option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_operation) = {
+      summary: "Authorize an SSH public-key authentication attempt"
+      tags: ["SSH Authorization"]
+    };
+  }
+}
+
+// AuthorizeSSHRequest is sent by the sentinel plugin on every
+// public-key authentication attempt.
+message AuthorizeSSHRequest {
+  // credential is the key or certificate offered by the SSH client.
+  SSHCredential credential = 1;
+
+  // login is the SSH username (the left side of authorized_keys).
+  string login = 2;
+
+  // backend is the backend identifier resolved from the login by the keystore.
+  string backend = 3;
+
+  // client_addr is the SSH client's remote address (IP:port), recorded for
+  // audit purposes only — it is never used for authorization decisions.
+  string client_addr = 4;
+
+  // approval_id is set on follow-up polls during the keyboard-interactive
+  // approval flow. Empty on the first call.
+  string approval_id = 5;
+}
+
+// AuthorizeSSHResponse is returned by Authorize.
+message AuthorizeSSHResponse {
+  // decision is the authorization outcome.
+  SSHAuthzDecision decision = 1;
+
+  // deny_reason is set when decision is DENY.
+  SSHDenyReason deny_reason = 2;
+
+  // device_approval is set when decision is APPROVAL_PENDING.
+  SSHDeviceApproval device_approval = 3;
+
+  // user_id is the backend's internal identifier for the authenticated user.
+  // Set when decision is ALLOW.
+  string user_id = 4;
+
+  // cache_ttl tells the sentinel how long to cache a positive result.
+  // Zero means do not cache.
+  google.protobuf.Duration cache_ttl = 5;
+}
+
+// SSHCredential carries the credential offered by the SSH client.
+// Exactly one field is set.
+message SSHCredential {
+  oneof credential {
+    // public_key is the raw wire-format public key (ssh.PublicKey.Marshal()).
+    bytes public_key = 1;
+
+    // certificate is the raw wire-format SSH certificate.
+    bytes certificate = 2;
+  }
+
+  // key_type describes the algorithm of the offered key or certificate's
+  // subject key.
+  SSHKeyType key_type = 3;
+
+  // fingerprint is the SHA-256 fingerprint of the offered key
+  // (ssh.FingerprintSHA256 format, without the "SHA256:" prefix).
+  string fingerprint = 4;
+}
+
+// SSHDeviceApproval carries the data the sentinel needs to drive the
+// device-approval flow (keyboard-interactive or banner).
+message SSHDeviceApproval {
+  // approval_id is the opaque identifier the sentinel passes back on polls.
+  string approval_id = 1;
+
+  // url is the page the user must open to approve the device.
+  string url = 2;
+
+  // code is the short code displayed in the challenge / banner.
+  string code = 3;
+
+  // expires_at is the hard deadline after which the approval request is void.
+  google.protobuf.Timestamp expires_at = 4;
+
+  // poll_after is the minimum interval between Authorize polls.
+  google.protobuf.Duration poll_after = 5;
+}
+
+// SSHKeyType enumerates the SSH key algorithms the system recognises.
+enum SSHKeyType {
+  SSH_KEY_TYPE_UNSPECIFIED = 0;
+  SSH_KEY_TYPE_ED25519     = 1;
+  SSH_KEY_TYPE_ECDSA_P256  = 2;
+  SSH_KEY_TYPE_ECDSA_P384  = 3;
+  SSH_KEY_TYPE_RSA         = 4;
+}
+
+// SSHAuthzDecision is the top-level outcome of Authorize.
+enum SSHAuthzDecision {
+  SSH_AUTHZ_DECISION_UNSPECIFIED       = 0;
+  // ALLOW means the authentication is permitted.
+  SSH_AUTHZ_DECISION_ALLOW             = 1;
+  // DENY means the authentication is refused.
+  SSH_AUTHZ_DECISION_DENY              = 2;
+  // APPROVAL_PENDING means the user must approve the device before
+  // authentication can complete.
+  SSH_AUTHZ_DECISION_APPROVAL_PENDING  = 3;
+}
+
+// SSHDenyReason gives the specific reason for a DENY decision.
+enum SSHDenyReason {
+  SSH_DENY_REASON_UNSPECIFIED         = 0;
+  // UNKNOWN_KEY: the fingerprint is not registered for this backend/login.
+  SSH_DENY_REASON_UNKNOWN_KEY         = 1;
+  // USER_DISABLED: the user account is disabled.
+  SSH_DENY_REASON_USER_DISABLED       = 2;
+  // ORG_POLICY: an organisation-level policy forbids the access.
+  SSH_DENY_REASON_ORG_POLICY          = 3;
+  // UPSTREAM_UNAVAILABLE: the authz backend was unreachable and the grace
+  // window has expired.
+  SSH_DENY_REASON_UPSTREAM_UNAVAILABLE = 4;
+  // APPROVAL_DENIED: the device approval request was explicitly rejected.
+  SSH_DENY_REASON_APPROVAL_DENIED     = 5;
+  // APPROVAL_EXPIRED: the device approval request timed out.
+  SSH_DENY_REASON_APPROVAL_EXPIRED    = 6;
+}
